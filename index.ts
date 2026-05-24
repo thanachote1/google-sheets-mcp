@@ -1004,8 +1004,34 @@ async function loadCredentialsAndRunServer() {
     } else {
         try {
             const credentials = JSON.parse(fs.readFileSync(credentialsPath, "utf-8"));
-            auth = new google.auth.OAuth2();
+
+            // โหลด OAuth keys เพื่อให้ได้ client_id และ client_secret
+            // ถ้าไม่ใส่ค่าเหล่านี้ OAuth2Client จะไม่สามารถ refresh token อัตโนมัติได้
+            const gcpKeysPath = path.join(
+                path.dirname(fileURLToPath(import.meta.url)),
+                "gcp-oauth.keys.json"
+            );
+            const keys = JSON.parse(fs.readFileSync(gcpKeysPath, "utf-8"));
+            const { client_id, client_secret, redirect_uris } = keys.installed || keys.web;
+
+            // สร้าง OAuth2Client พร้อม client credentials ครบถ้วน
+            // เพื่อให้สามารถ refresh access_token โดยใช้ refresh_token ได้อัตโนมัติ
+            auth = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
             auth.setCredentials(credentials);
+
+            // เมื่อ access_token ถูก refresh อัตโนมัติ → บันทึก token ใหม่ลงไฟล์
+            // ทำให้ไม่ต้อง login ซ้ำอีก แม้ใช้งานต่อเนื่องนานหลายชั่วโมง
+            auth.on('tokens', (newTokens) => {
+                try {
+                    const current = JSON.parse(fs.readFileSync(credentialsPath, "utf-8"));
+                    const updated = { ...current, ...newTokens };
+                    fs.writeFileSync(credentialsPath, JSON.stringify(updated));
+                    console.error("[Auth] Token refreshed and saved automatically.");
+                } catch (e) {
+                    console.error("[Auth] Failed to save refreshed token:", e);
+                }
+            });
+
         } catch (error) {
             console.error("Error loading credentials, initiating new authentication flow...");
             auth = await authenticateAndSaveCredentials();
